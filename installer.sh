@@ -2,6 +2,7 @@
 set -e
 
 CONFIG="/etc/sing-box/config.json"
+REALITY_PUB="/etc/sing-box/reality_public.key"
 
 check_root() {
   if [ "$EUID" -ne 0 ]; then
@@ -35,7 +36,7 @@ ask_client_params() {
   fi
 
   if [[ "$NAME" == "$ADMIN_NAME" ]]; then
-    echo "❌ Это admin, он уже существует"
+    echo "❌ admin уже существует"
     exit 1
   fi
 
@@ -53,7 +54,7 @@ install_singbox() {
   echo "🔧 Установка sing-box..."
 
   apt update
-  apt install -y curl jq ufw openssl
+  apt install -y curl jq openssl
   curl -fsSL https://sing-box.app/install.sh | bash
 
   mkdir -p /etc/sing-box
@@ -61,6 +62,8 @@ install_singbox() {
   REALITY_KEYS=$(sing-box generate reality-keypair)
   PRIVATE_KEY=$(echo "$REALITY_KEYS" | awk '/PrivateKey/ {print $2}')
   PUBLIC_KEY=$(echo "$REALITY_KEYS" | awk '/PublicKey/ {print $2}')
+  echo "$PUBLIC_KEY" > "$REALITY_PUB"
+
   SHORT_ID=$(openssl rand -hex 8)
 
   ADMIN_UUID=$(cat /proc/sys/kernel/random/uuid)
@@ -149,48 +152,45 @@ EOF
 
 add_client() {
   ask_client_params
-
   IP=$(curl -s ifconfig.me)
 
   if [[ "$PROTO" == "vless" ]]; then
     UUID=$(cat /proc/sys/kernel/random/uuid)
 
-    jq '.inbounds[] |= if .tag=="vless"
-      then .users += [{"uuid":"'"$UUID"'","name":"'"$NAME"'","flow":"xtls-rprx-vision"}]
-      else . end' \
-      $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+    jq '.inbounds[] |= (
+      if .tag=="vless" then
+        .users += [{"uuid":"'"$UUID"'","name":"'"$NAME"'","flow":"xtls-rprx-vision"}]
+      else . end
+    )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
 
     PORT=$(jq -r '.inbounds[] | select(.tag=="vless") | .listen_port' $CONFIG)
     SNI=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.server_name' $CONFIG)
-    PBK=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.reality.private_key' $CONFIG | \
-          sing-box generate reality-public-key)
     SID=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.reality.short_id[0]' $CONFIG)
+    PBK=$(cat "$REALITY_PUB")
 
     echo
-    echo "✅ Клиент добавлен в VLESS"
-    echo "Ссылка:"
+    echo "✅ Клиент добавлен (VLESS)"
     echo "vless://$UUID@$IP:$PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$SNI&fp=chrome&pbk=$PBK&sid=$SID&type=tcp#VPN"
 
   else
     PASS=$(openssl rand -hex 16)
 
-    jq '.inbounds[] |= if .tag=="hy2"
-      then .users += [{"name":"'"$NAME"'","password":"'"$PASS"'"}]
-      else . end' \
-      $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+    jq '.inbounds[] |= (
+      if .tag=="hy2" then
+        .users += [{"name":"'"$NAME"'","password":"'"$PASS"'"}]
+      else . end
+    )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
 
     PORT=$(jq -r '.inbounds[] | select(.tag=="hy2") | .listen_port' $CONFIG)
 
     echo
-    echo "✅ Клиент добавлен в Hysteria2"
-    echo "Ссылка:"
+    echo "✅ Клиент добавлен (Hysteria2)"
     echo "hy2://$PASS@$IP:$PORT/?insecure=1#VPN"
   fi
 
   systemctl restart sing-box
   read -p "Enter..."
 }
-
 
 list_clients() {
   echo "📋 VLESS:"
@@ -205,23 +205,20 @@ remove_client() {
   list_clients
   read -p "Введите имя клиента для удаления: " NAME
 
-  if [[ -z "$NAME" ]]; then
-    echo "❌ Имя не может быть пустым"
+  if [[ "$NAME" == "$ADMIN_NAME" ]]; then
+    echo "❌ Нельзя удалить admin"
     read -p "Enter..."
     return
   fi
 
-  jq '
-    .inbounds[] |= (
-      .users |= map(select(.name != "'"$NAME"'"))
-    )
-  ' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+  jq '.inbounds[] |= (
+    .users |= map(select(.name != "'"$NAME"'"))
+  )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
 
   systemctl restart sing-box
-  echo "🗑 Клиент удалён: $NAME"
+  echo "🗑 Клиент удалён"
   read -p "Enter..."
 }
-
 
 remove_all() {
   read -p "⚠️ Удалить sing-box полностью? (y/n): " C
@@ -244,7 +241,7 @@ menu() {
   echo "=============================="
   echo "1) ➕ Добавить клиента"
   echo "2) ➖ Удалить клиента"
-  echo "3) 👁  Посмотреть клиентов"
+  echo "3) 👁 Посмотреть клиентов"
   echo "4) ❌ Удалить sing-box"
   echo "0) 🚪 Выход"
   echo "=============================="
