@@ -69,7 +69,7 @@ install_singbox() {
   ADMIN_UUID=$(cat /proc/sys/kernel/random/uuid)
   ADMIN_PASS=$(openssl rand -hex 16)
 
-  cat > $CONFIG <<EOF
+  cat > "$CONFIG" <<EOF
 {
   "log": { "level": "warn" },
 
@@ -114,10 +114,8 @@ install_singbox() {
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
-        "certificate": {
-          "certificate_path": "/etc/sing-box/cert.pem",
-          "key_path": "/etc/sing-box/key.pem"
-        }
+        "certificate": "/etc/sing-box/cert.pem",
+        "certificate_key": "/etc/sing-box/key.pem"
       }
     }
   ],
@@ -128,6 +126,7 @@ install_singbox() {
 }
 EOF
 
+  # self-signed TLS для Hysteria2
   openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
     -keyout /etc/sing-box/key.pem \
     -out /etc/sing-box/cert.pem \
@@ -161,11 +160,11 @@ add_client() {
       if .tag=="vless" then
         .users += [{"uuid":"'"$UUID"'","name":"'"$NAME"'","flow":"xtls-rprx-vision"}]
       else . end
-    )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+    )' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
 
-    PORT=$(jq -r '.inbounds[] | select(.tag=="vless") | .listen_port' $CONFIG)
-    SNI=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.server_name' $CONFIG)
-    SID=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.reality.short_id[0]' $CONFIG)
+    PORT=$(jq -r '.inbounds[] | select(.tag=="vless") | .listen_port' "$CONFIG")
+    SNI=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.server_name' "$CONFIG")
+    SID=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.reality.short_id[0]' "$CONFIG")
     PBK=$(cat "$REALITY_PUB")
 
     echo
@@ -179,9 +178,9 @@ add_client() {
       if .tag=="hy2" then
         .users += [{"name":"'"$NAME"'","password":"'"$PASS"'"}]
       else . end
-    )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+    )' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
 
-    PORT=$(jq -r '.inbounds[] | select(.tag=="hy2") | .listen_port' $CONFIG)
+    PORT=$(jq -r '.inbounds[] | select(.tag=="hy2") | .listen_port' "$CONFIG")
 
     echo
     echo "✅ Клиент добавлен (Hysteria2)"
@@ -194,10 +193,10 @@ add_client() {
 
 list_clients() {
   echo "📋 VLESS:"
-  jq -r '.inbounds[] | select(.tag=="vless") | .users[] | "Name: \(.name) | UUID: \(.uuid)"' $CONFIG
+  jq -r '.inbounds[] | select(.tag=="vless") | .users[] | "Name: \(.name) | UUID: \(.uuid)"' "$CONFIG"
   echo
   echo "📋 Hysteria2:"
-  jq -r '.inbounds[] | select(.tag=="hy2") | .users[] | "Name: \(.name) | Password: \(.password)"' $CONFIG
+  jq -r '.inbounds[] | select(.tag=="hy2") | .users[] | "Name: \(.name) | Password: \(.password)"' "$CONFIG"
   read -p "Enter..."
 }
 
@@ -213,7 +212,7 @@ remove_client() {
 
   jq '.inbounds[] |= (
     .users |= map(select(.name != "'"$NAME"'"))
-  )' $CONFIG > /tmp/config.json && mv /tmp/config.json $CONFIG
+  )' "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
 
   systemctl restart sing-box
   echo "🗑 Клиент удалён"
