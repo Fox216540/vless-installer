@@ -114,8 +114,10 @@ install_singbox() {
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
-        "certificate": "/etc/sing-box/cert.pem",
-        "certificate_key": "/etc/sing-box/key.pem"
+        "certificate": [
+          "/etc/sing-box/cert.pem",
+          "/etc/sing-box/key.pem"
+        ]
       }
     }
   ],
