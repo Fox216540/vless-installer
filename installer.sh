@@ -13,7 +13,7 @@ check_root() {
 
 ask_install_params() {
   read -p "🔌 Порт VLESS Reality (TCP, напр. 443): " VLESS_PORT
-  read -p "🌐 SNI для Reality (напр. www.cloudflare.com): " SNI
+  read -p "🌐 SNI для Reality/Hysteria2 (напр. www.cloudflare.com): " SNI
   read -p "🚀 Порт Hysteria2 (UDP, напр. 8443): " HY_PORT
   read -p "👑 Имя admin пользователя: " ADMIN_NAME
 
@@ -59,6 +59,7 @@ install_singbox() {
 
   mkdir -p /etc/sing-box
 
+  # Reality keypair
   REALITY_KEYS=$(sing-box generate reality-keypair)
   PRIVATE_KEY=$(echo "$REALITY_KEYS" | awk '/PrivateKey/ {print $2}')
   PUBLIC_KEY=$(echo "$REALITY_KEYS" | awk '/PublicKey/ {print $2}')
@@ -105,6 +106,8 @@ install_singbox() {
       "tag": "hy2",
       "listen": "::",
       "listen_port": $HY_PORT,
+      "up_mbps": 100,
+      "down_mbps": 100,
       "users": [
         {
           "name": "$ADMIN_NAME",
@@ -113,11 +116,9 @@ install_singbox() {
       ],
       "tls": {
         "enabled": true,
-        "alpn": ["h3"],
-        "certificate": [
-          "/etc/sing-box/cert.pem",
-          "/etc/sing-box/key.pem"
-        ]
+        "server_name": "$SNI",
+        "certificate_path": "/etc/sing-box/cert.pem",
+        "key_path": "/etc/sing-box/key.pem"
       }
     }
   ],
