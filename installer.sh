@@ -66,10 +66,6 @@ install_singbox() {
   ADMIN_UUID=$(cat /proc/sys/kernel/random/uuid)
   ADMIN_PASS=$(openssl rand -hex 16)
 
-  ufw allow $VLESS_PORT/tcp
-  ufw allow $HY_PORT/udp
-  ufw --force enable
-
   cat > $CONFIG <<EOF
 {
   "log": { "level": "warn" },
