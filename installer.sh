@@ -99,11 +99,10 @@ install_singbox() {
           "private_key": "$PRIVATE_KEY",
           "short_id": ["$SHORT_ID"]
         },
-
         "fallback": {
-                  "server": "127.0.0.1",
-                  "server_port": 8443
-                }
+          "server": "127.0.0.1",
+          "server_port": 8443
+        }
       }
     },
     {
