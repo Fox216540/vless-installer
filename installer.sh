@@ -98,7 +98,7 @@ install_singbox() {
           },
           "private_key": "$PRIVATE_KEY",
           "short_id": ["$SHORT_ID"]
-        },
+        }
       }
     },
     {
