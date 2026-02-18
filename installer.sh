@@ -76,6 +76,7 @@ install_singbox() {
 
   "inbounds": [
     {
+      "tcp_keep_alive": "30s",
       "type": "vless",
       "tag": "vless",
       "listen": "::",
