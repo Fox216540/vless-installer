@@ -1,304 +1,195 @@
 #!/bin/bash
 set -e
 
-CONFIG="/etc/sing-box/config.json"
-REALITY_PUB="/etc/sing-box/reality_public.key"
-VLESS_INTERNAL_PORT=4431
+# --- НАСТРОЙКИ ---
+CONFIG_DIR="/etc/sing-box"
+DATA_DIR="/var/lib/sing-box-manager"
+SNI_FILE="$DATA_DIR/snis.conf"
+USER_FILE="$DATA_DIR/users.conf"
+CRED_FILE="$DATA_DIR/credentials.conf"
+START_PORT=4431
+# -----------------
 
-check_root() {
-  if [ "$EUID" -ne 0 ]; then
-    echo "❌ Запусти от root"
-    exit 1
-  fi
-}
+if [ "$EUID" -ne 0 ]; then echo "❌ Запусти от root"; exit 1; fi
 
-ask_install_params() {
-  read -p "🌐 SNI СЕРВЕРА для Reality (напр. www.cloudflare.com): " SERVER_SNI
-  read -p "👑 Имя admin пользователя: " ADMIN_NAME
-  read -p "🚀 Включить Hysteria2? (y/n): " ENABLE_HY2
+mkdir -p "$DATA_DIR" "$CONFIG_DIR"
+touch "$SNI_FILE" "$USER_FILE"
 
-  if [[ -z "$SERVER_SNI" || -z "$ADMIN_NAME" ]]; then
-    echo "❌ Все поля обязательны"
-    exit 1
-  fi
-
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    read -p "🚀 Порт Hysteria2 (UDP, напр. 8443): " HY_PORT
-    if [[ -z "$HY_PORT" ]]; then
-      echo "❌ Порт Hysteria2 обязателен"
-      exit 1
-    fi
-  fi
-}
-
-ask_client_params() {
-  read -p "Введите имя клиента: " NAME
-
-  if [[ -z "$NAME" ]]; then
-    echo "❌ Имя обязательно"
-    exit 1
-  fi
-
-  if [[ "$NAME" == "$ADMIN_NAME" ]]; then
-    echo "❌ admin уже существует"
-    exit 1
-  fi
-
-  echo "Выберите протокол:"
-  echo "1) VLESS Reality"
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    echo "2) Hysteria2"
-  fi
-
-  read -p "Выбор: " P
-
-  if [[ "$P" == "1" ]]; then
-    PROTO="vless"
-    read -p "🌍 SNI клиента (например ads.x5.ru): " CLIENT_SNI
-    if [[ -z "$CLIENT_SNI" ]]; then
-      echo "❌ SNI клиента обязателен"
-      exit 1
-    fi
-  elif [[ "$P" == "2" && "$ENABLE_HY2" == "y" ]]; then
-    PROTO="hy2"
-  else
-    echo "❌ Неверный выбор"
-    exit 1
-  fi
-}
-
-install_nginx() {
-  apt install -y nginx
-
-  cat > /etc/nginx/nginx.conf <<EOF
-worker_processes auto;
-
-events {
-  worker_connections 1024;
-}
-
-stream {
-  server {
-    listen 0.0.0.0:443;
-    ssl_preread on;
-    proxy_pass 127.0.0.1:${VLESS_INTERNAL_PORT};
-  }
-}
-EOF
-
-  nginx -t
-  systemctl enable nginx
-  systemctl restart nginx
-}
-
-install_singbox() {
-  echo "🔧 Установка sing-box и nginx..."
-
-  apt update
-  apt install -y curl jq openssl
-  curl -fsSL https://sing-box.app/install.sh | bash
-
-  install_nginx
-
-  mkdir -p /etc/sing-box
-
-  REALITY_KEYS=$(sing-box generate reality-keypair)
-  PRIVATE_KEY=$(echo "$REALITY_KEYS" | awk '/PrivateKey/ {print $2}')
-  PUBLIC_KEY=$(echo "$REALITY_KEYS" | awk '/PublicKey/ {print $2}')
-  echo "$PUBLIC_KEY" > "$REALITY_PUB"
-
-  SHORT_ID=$(openssl rand -hex 8)
-  ADMIN_UUID=$(cat /proc/sys/kernel/random/uuid)
-
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    ADMIN_PASS=$(openssl rand -hex 16)
-  fi
-
-  # ---------- config.json ----------
-  cat > "$CONFIG" <<EOF
-{
-  "log": { "level": "warn" },
-
-  "inbounds": [
-    {
-      "type": "vless",
-      "tag": "vless",
-      "listen": "127.0.0.1",
-      "listen_port": ${VLESS_INTERNAL_PORT},
-      "users": [
-        {
-          "uuid": "$ADMIN_UUID",
-          "name": "$ADMIN_NAME",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "$SERVER_SNI",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "$SERVER_SNI",
-            "server_port": 443
-          },
-          "private_key": "$PRIVATE_KEY",
-          "short_id": ["$SHORT_ID"]
-        }
-      }
-    }
-EOF
-
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    cat >> "$CONFIG" <<EOF
-,
-    {
-      "type": "hysteria2",
-      "tag": "hy2",
-      "listen": "::",
-      "listen_port": $HY_PORT,
-      "up_mbps": 100,
-      "down_mbps": 100,
-      "users": [
-        {
-          "name": "$ADMIN_NAME",
-          "password": "$ADMIN_PASS"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "$SERVER_SNI",
-        "certificate_path": "/etc/sing-box/cert.pem",
-        "key_path": "/etc/sing-box/key.pem"
-      }
-    }
-EOF
-  fi
-
-  cat >> "$CONFIG" <<EOF
-  ],
-  "outbounds": [
-    { "type": "direct" }
-  ]
-}
-EOF
-
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
-      -keyout /etc/sing-box/key.pem \
-      -out /etc/sing-box/cert.pem \
-      -subj "/CN=$SERVER_SNI"
-  fi
-
-  systemctl enable sing-box
-  systemctl restart sing-box
-
-  IP=$(curl -s ifconfig.me)
-
-  echo "======================================"
-  echo "✅ Установка завершена"
-  echo
-  echo "ADMIN VLESS:"
-  echo "vless://$ADMIN_UUID@$IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$SERVER_SNI&fp=chrome&pbk=$PUBLIC_KEY&sid=$SHORT_ID&type=tcp#ADMIN"
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    echo
-    echo "ADMIN Hysteria2:"
-    echo "hy2://$ADMIN_PASS@$IP:$HY_PORT/?insecure=1#ADMIN"
-  fi
-  echo "======================================"
-  read -p "Enter для входа в меню..."
-}
-
-add_client() {
-  ask_client_params
-  IP=$(curl -s ifconfig.me)
-
-  if [[ "$PROTO" == "vless" ]]; then
-    UUID=$(cat /proc/sys/kernel/random/uuid)
-
-    jq '.inbounds[] |= (if .tag=="vless" then .users += [{"uuid":"'"$UUID"'","name":"'"$NAME"'","flow":"xtls-rprx-vision"}] else . end)' \
-      "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-
-    SID=$(jq -r '.inbounds[] | select(.tag=="vless") | .tls.reality.short_id[0]' "$CONFIG")
-    PBK=$(cat "$REALITY_PUB")
-
-    echo
-    echo "✅ Клиент добавлен (VLESS)"
-    echo "vless://$UUID@$IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$CLIENT_SNI&fp=chrome&pbk=$PBK&sid=$SID&type=tcp#VPN-$NAME"
-
-  elif [[ "$PROTO" == "hy2" ]]; then
-    PASS=$(openssl rand -hex 16)
-
-    jq '.inbounds[] |= (if .tag=="hy2" then .users += [{"name":"'"$NAME"'","password":"'"$PASS"'"}] else . end)' \
-      "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-
-    echo
-    echo "✅ Клиент добавлен (Hysteria2)"
-    echo "hy2://$PASS@$IP:$HY_PORT/?insecure=1#VPN-$NAME"
-  fi
-
-  systemctl restart sing-box
-  read -p "Enter..."
-}
-
-list_clients() {
-  echo "📋 VLESS:"
-  jq -r '.inbounds[] | select(.tag=="vless") | .users[] | "Name: \(.name) | UUID: \(.uuid)"' "$CONFIG"
-
-  if [[ "$ENABLE_HY2" == "y" ]]; then
-    echo
-    echo "📋 Hysteria2:"
-    jq -r '.inbounds[] | select(.tag=="hy2") | .users[] | "Name: \(.name) | Password: \(.password)"' "$CONFIG"
-  fi
-
-  read -p "Enter..."
-}
-
-remove_client() {
-  list_clients
-  read -p "Введите имя клиента для удаления: " NAME
-
-  if [[ "$NAME" == "$ADMIN_NAME" ]]; then
-    echo "❌ Нельзя удалить admin"
-    read -p "Enter..."
-    return
-  fi
-
-  jq '.inbounds[] |= (.users |= map(select(.name != "'"$NAME"'")))' \
-    "$CONFIG" > /tmp/config.json && mv /tmp/config.json "$CONFIG"
-
-  systemctl restart sing-box
-  echo "🗑 Клиент удалён"
-  read -p "Enter..."
-}
-
-menu() {
-  clear
-  echo "=============================="
-  echo "   SING-BOX + NGINX MANAGER"
-  echo "=============================="
-  echo "1) ➕ Добавить клиента"
-  echo "2) ➖ Удалить клиента"
-  echo "3) 👁 Посмотреть клиентов"
-  echo "0) 🚪 Выход"
-  echo "=============================="
-  read -p "Выбор: " C
-
-  case $C in
-    1) add_client ;;
-    2) remove_client ;;
-    3) list_clients ;;
-    0) exit 0 ;;
-    *) sleep 1 ;;
-  esac
-}
-
-check_root
-
-if [ ! -f "$CONFIG" ]; then
-  ask_install_params
-  install_singbox
+# Активация модуля stream для Nginx
+if [ ! -f /etc/nginx/modules-enabled/50-mod-stream.conf ]; then
+    apt update && apt install -y libnginx-mod-stream
+    echo "load_module modules/ngx_stream_module.so;" > /etc/nginx/modules-enabled/50-mod-stream.conf
 fi
 
-while true; do
-  menu
-done
+get_credentials() {
+    if [ -f "$CRED_FILE" ]; then
+        source "$CRED_FILE"
+        # Если IP в файле почему-то пустой, переполучим его
+        if [ -z "$SERVER_IP" ]; then
+            SERVER_IP=$(curl -s ifconfig.me)
+            echo "SERVER_IP=\"$SERVER_IP\"" >> "$CRED_FILE"
+        fi
+    else
+        echo "⚙️ Инициализация сервера..."
+        KEYS=$(sing-box generate reality-keypair)
+        PRIV_KEY=$(echo "$KEYS" | awk '/PrivateKey/ {print $2}')
+        PUB_KEY=$(echo "$KEYS" | awk '/PublicKey/ {print $2}')
+        SHORT_ID=$(openssl rand -hex 8)
+        SERVER_IP=$(curl -s ifconfig.me)
+        cat > "$CRED_FILE" <<EOF
+PRIV_KEY="$PRIV_KEY"
+PUB_KEY="$PUB_KEY"
+SHORT_ID="$SHORT_ID"
+SERVER_IP="$SERVER_IP"
+EOF
+    fi
+}
+
+rebuild_configs() {
+    get_credentials
+    sort -u "$SNI_FILE" -o "$SNI_FILE"
+    sed -i '/^$/d' "$SNI_FILE"
+    sed -i '/^$/d' "$USER_FILE"
+    readarray -t SNI_LIST < "$SNI_FILE"
+
+    USERS_JSON=""
+    while IFS=: read -r name uuid; do
+        [ -z "$name" ] && continue
+        USERS_JSON+="{\"uuid\": \"$uuid\", \"flow\": \"xtls-rprx-vision\", \"name\": \"$name\"},"
+    done < "$USER_FILE"
+    USERS_JSON=$(echo "${USERS_JSON%,}")
+
+    if [ ${#SNI_LIST[@]} -eq 0 ]; then
+        echo "{\"log\": {\"level\": \"warn\"}, \"inbounds\": [], \"outbounds\": [{\"type\": \"direct\"}]}" > "$CONFIG_DIR/config.json"
+        cat > /etc/nginx/nginx.conf <<EOF
+user www-data;
+worker_processes auto;
+include /etc/nginx/modules-enabled/*.conf;
+events { worker_connections 1024; }
+stream { server { listen 443; return 444; } }
+EOF
+        systemctl restart nginx sing-box
+        return
+    fi
+
+    NGINX_MAP=""
+    NGINX_UPSTREAMS=""
+    SB_INBOUNDS=""
+    CURRENT_PORT=$START_PORT
+
+    for sni in "${SNI_LIST[@]}"; do
+        UP_NAME="vless_$CURRENT_PORT"
+        NGINX_MAP+="        $sni    $UP_NAME;\n"
+        NGINX_UPSTREAMS+="    upstream $UP_NAME { server 127.0.0.1:$CURRENT_PORT; }\n"
+        SB_INBOUNDS+="$(cat <<EOF
+        {
+          "type": "vless",
+          "tag": "in-$CURRENT_PORT",
+          "listen": "127.0.0.1",
+          "listen_port": $CURRENT_PORT,
+          "users": [ $USERS_JSON ],
+          "tls": {
+            "enabled": true,
+            "server_name": "$sni",
+            "reality": {
+              "enabled": true,
+              "handshake": { "server": "$sni", "server_port": 443 },
+              "private_key": "$PRIV_KEY",
+              "short_id": ["$SHORT_ID"]
+            }
+          }
+        },
+EOF
+)\n"
+        ((CURRENT_PORT++))
+    done
+
+    SB_INBOUNDS=$(echo -e "$SB_INBOUNDS" | sed '$ s/,$//')
+
+    cat > /etc/nginx/nginx.conf <<EOF
+user www-data;
+worker_processes auto;
+include /etc/nginx/modules-enabled/*.conf;
+events { worker_connections 1024; }
+stream {
+    map \$ssl_preread_server_name \$backend_name {
+$(echo -e "$NGINX_MAP")
+        default fallback;
+    }
+$(echo -e "$NGINX_UPSTREAMS")
+    upstream fallback { server 127.0.0.1:9; }
+    server { listen 443; proxy_pass \$backend_name; ssl_preread on; }
+}
+EOF
+
+    if nginx -t > /dev/null 2>&1; then
+        systemctl reload nginx || systemctl restart nginx
+    else
+        systemctl restart nginx
+    fi
+
+    echo "{\"log\": {\"level\": \"warn\"}, \"inbounds\": [ $SB_INBOUNDS ], \"outbounds\": [{\"type\": \"direct\"}]}" > "$CONFIG_DIR/config.json"
+    systemctl is-active --quiet sing-box && systemctl kill -s SIGHUP sing-box || systemctl restart sing-box
+}
+
+case "$1" in
+    addsni)
+        if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
+        INPUT_SNIS=${2//,/ }
+        for s in $INPUT_SNIS; do
+            if ! grep -qxF "$s" "$SNI_FILE"; then
+                echo "$s" >> "$SNI_FILE"
+                echo "SNI ADD"
+            fi
+        done
+        rebuild_configs > /dev/null
+        ;;
+    delsni)
+        if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
+        INPUT_SNIS=${2//,/ }
+        for s in $INPUT_SNIS; do
+            sed -i "\|^$s$|d" "$SNI_FILE"
+            echo "SNI DELETE"
+        done
+        rebuild_configs > /dev/null
+        ;;
+    generateclient)
+        if [ -z "$2" ]; then echo "NO NAME"; exit 1; fi
+        if grep -q "^$2:" "$USER_FILE"; then
+            echo "ALREADY EXIST"
+        else
+            echo "$2:$(cat /proc/sys/kernel/random/uuid)" >> "$USER_FILE"
+            rebuild_configs > /dev/null
+            echo "CLIENT ADD"
+        fi
+        ;;
+    delclient)
+        if [ -z "$2" ]; then echo "NO NAME"; exit 1; fi
+        sed -i "/^$2:/d" "$USER_FILE"
+        rebuild_configs > /dev/null
+        echo "CLIENT DELETE"
+        ;;
+    view)
+        CLIENT_NAME="$2"
+        SPECIFIC_SNIS="$3"
+        if [ -z "$CLIENT_NAME" ]; then echo "ERROR VIEW"; exit 1; fi
+        USER_DATA=$(grep "^$CLIENT_NAME:" "$USER_FILE") || { echo "NO EXIST"; exit 1; }
+        UUID=$(echo "$USER_DATA" | cut -d: -f2)
+        get_credentials
+        SELECTED_SNIS=${SPECIFIC_SNIS//,/ }
+        [ -z "$SELECTED_SNIS" ] && SELECTED_SNIS=$(cat "$SNI_FILE")
+        for s in $SELECTED_SNIS; do
+            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$s-$CLIENT_NAME"
+        done
+        ;;
+    list)
+        echo -e "\n--- DOMAINS ---"; cat "$SNI_FILE"
+        echo -e "\n--- CLIENTS ---"; cut -d: -f1 "$USER_FILE"
+        ;;
+    *)
+        apt update && apt install -y curl jq openssl nginx libnginx-mod-stream
+        [ ! -x "$(command -v sing-box)" ] && bash <(curl -fsSL https://sing-box.app/install.sh)
+        rebuild_configs
+        echo "DONE"
+        ;;
+esac
