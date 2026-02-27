@@ -24,7 +24,6 @@ fi
 get_credentials() {
     if [ -f "$CRED_FILE" ]; then
         source "$CRED_FILE"
-        # Если IP в файле почему-то пустой, переполучим его
         if [ -z "$SERVER_IP" ]; then
             SERVER_IP=$(curl -s ifconfig.me)
             echo "SERVER_IP=\"$SERVER_IP\"" >> "$CRED_FILE"
@@ -42,6 +41,7 @@ PUB_KEY="$PUB_KEY"
 SHORT_ID="$SHORT_ID"
 SERVER_IP="$SERVER_IP"
 EOF
+        source "$CRED_FILE"
     fi
 }
 
@@ -122,42 +122,36 @@ $(echo -e "$NGINX_UPSTREAMS")
 }
 EOF
 
-    if nginx -t > /dev/null 2>&1; then
-        systemctl reload nginx || systemctl restart nginx
-    else
-        systemctl restart nginx
-    fi
-
+    nginx -t > /dev/null 2>&1 && (systemctl reload nginx || systemctl restart nginx) || systemctl restart nginx
     echo "{\"log\": {\"level\": \"warn\"}, \"inbounds\": [ $SB_INBOUNDS ], \"outbounds\": [{\"type\": \"direct\"}]}" > "$CONFIG_DIR/config.json"
     systemctl is-active --quiet sing-box && systemctl kill -s SIGHUP sing-box || systemctl restart sing-box
 }
 
 case "$1" in
+    setname)
+        if [ -z "$2" ]; then echo "❌ Укажите текст для ссылки"; exit 1; fi
+        get_credentials
+        sed -i '/VPN_NAME=/d' "$CRED_FILE"
+        echo "VPN_NAME=\"$2\"" >> "$CRED_FILE"
+        echo "✅ Текст ссылки установлен: $2"
+        ;;
     addsni)
         if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
         INPUT_SNIS=${2//,/ }
         for s in $INPUT_SNIS; do
-            if ! grep -qxF "$s" "$SNI_FILE"; then
-                echo "$s" >> "$SNI_FILE"
-                echo "SNI ADD"
-            fi
+            if ! grep -qxF "$s" "$SNI_FILE"; then echo "$s" >> "$SNI_FILE"; echo "SNI ADD"; fi
         done
         rebuild_configs > /dev/null
         ;;
     delsni)
         if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
         INPUT_SNIS=${2//,/ }
-        for s in $INPUT_SNIS; do
-            sed -i "\|^$s$|d" "$SNI_FILE"
-            echo "SNI DELETE"
-        done
+        for s in $INPUT_SNIS; do sed -i "\|^$s$|d" "$SNI_FILE"; echo "SNI DELETE"; done
         rebuild_configs > /dev/null
         ;;
     generateclient)
         if [ -z "$2" ]; then echo "NO NAME"; exit 1; fi
-        if grep -q "^$2:" "$USER_FILE"; then
-            echo "ALREADY EXIST"
-        else
+        if grep -q "^$2:" "$USER_FILE"; then echo "ALREADY EXIST"; else
             echo "$2:$(cat /proc/sys/kernel/random/uuid)" >> "$USER_FILE"
             rebuild_configs > /dev/null
             echo "CLIENT ADD"
@@ -176,10 +170,18 @@ case "$1" in
         USER_DATA=$(grep "^$CLIENT_NAME:" "$USER_FILE") || { echo "NO EXIST"; exit 1; }
         UUID=$(echo "$USER_DATA" | cut -d: -f2)
         get_credentials
+        
+        # Если VPN_NAME задано, используем ТОЛЬКО его. Если нет — старый формат.
+        if [ -n "$VPN_NAME" ]; then
+            REMARK="$VPN_NAME"
+        else
+            REMARK="VLESS-$CLIENT_NAME"
+        fi
+
         SELECTED_SNIS=${SPECIFIC_SNIS//,/ }
         [ -z "$SELECTED_SNIS" ] && SELECTED_SNIS=$(cat "$SNI_FILE")
         for s in $SELECTED_SNIS; do
-            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$s-$CLIENT_NAME"
+            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$REMARK"
         done
         ;;
     list)
