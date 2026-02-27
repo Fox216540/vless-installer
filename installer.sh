@@ -129,11 +129,15 @@ EOF
 
 case "$1" in
     setname)
-        if [ -z "$2" ]; then echo "❌ Укажите текст для ссылки"; exit 1; fi
+        # Если $2 пустое — имя сбросится, если нет — запишется с поддержкой Unicode
         get_credentials
         sed -i '/VPN_NAME=/d' "$CRED_FILE"
-        echo "VPN_NAME=\"$2\"" >> "$CRED_FILE"
-        echo "✅ Текст ссылки установлен: $2"
+        if [ -n "$2" ]; then
+            echo "VPN_NAME=\"$2\"" >> "$CRED_FILE"
+            echo "✅ Текст ссылки установлен: $2"
+        else
+            echo "🔄 Имя сброшено к стандартному (VLESS-имя)"
+        fi
         ;;
     addsni)
         if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
@@ -171,17 +175,20 @@ case "$1" in
         UUID=$(echo "$USER_DATA" | cut -d: -f2)
         get_credentials
         
-        # Если VPN_NAME задано, используем ТОЛЬКО его. Если нет — старый формат.
+        # Если VPN_NAME задано, используем его. Если нет — стандарт.
         if [ -n "$VPN_NAME" ]; then
             REMARK="$VPN_NAME"
         else
             REMARK="VLESS-$CLIENT_NAME"
         fi
 
+        # Заменяем пробелы на %20 для безопасности ссылки
+        REMARK_ENCODED="${REMARK// /%20}"
+
         SELECTED_SNIS=${SPECIFIC_SNIS//,/ }
         [ -z "$SELECTED_SNIS" ] && SELECTED_SNIS=$(cat "$SNI_FILE")
         for s in $SELECTED_SNIS; do
-            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$REMARK"
+            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$REMARK_ENCODED"
         done
         ;;
     list)
