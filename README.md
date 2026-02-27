@@ -1,79 +1,122 @@
-# Sing-box + Nginx SNI Manager
+# 🚀 Sing-box VLESS Reality Manager
 
-Скрипт разворачивает и обслуживает VLESS Reality на базе `sing-box` и `nginx` (stream + SNI routing).
+Bash-скрипт для **автоматической установки и управления sing-box + Nginx (stream)** с протоколом **VLESS Reality** на Linux-серверах (Ubuntu / Debian).
 
-## Что делает
+Подходит для быстрого развёртывания VPN без TLS-сертификатов с маршрутизацией по **SNI** на `443`.
 
-- Устанавливает зависимости: `curl`, `jq`, `openssl`, `nginx`, `libnginx-mod-stream`, `sing-box`
-- Создаёт и ведёт хранилище:
-  - `/var/lib/sing-box-manager/snis.conf`
-  - `/var/lib/sing-box-manager/users.conf`
-  - `/var/lib/sing-box-manager/credentials.conf`
-- Генерирует постоянные REALITY-ключи (один раз) и использует их повторно
-- Строит `sing-box` конфиг: `/etc/sing-box/config.json`
-- Строит `nginx` stream-конфиг с маршрутизацией по SNI на порт `443`
+---
 
-## Требования
+## ✨ Возможности
 
-- Ubuntu/Debian
-- root-доступ
-- Открыт TCP `443`
+- ⚙️ Автоустановка `sing-box`, `nginx` и зависимостей
+- 🔐 Генерация постоянных Reality-ключей (`PrivateKey`, `PublicKey`, `ShortID`)
+- 🌐 Поддержка нескольких SNI-доменов
+- ➕ Добавление клиентов (UUID генерируется автоматически)
+- ➖ Удаление клиентов
+- 👁 Просмотр клиентов и доменов
+- 🔗 Генерация готовых VLESS-ссылок
+- 🏷 Установка общего имени ссылки (`setname`)
+- ♻️ Автопересборка конфигов `sing-box` и `nginx` после изменений
 
-## Установка
+---
 
-Сохраните скрипт, например как `start.sh`, сделайте исполняемым и запустите:
+## 🖥 Требования
 
+- ОС: **Ubuntu / Debian**
+- Права: **root**
+- Открытый TCP-порт: **443**
+- Валидные SNI-домены (например: `www.cloudflare.com`)
+
+---
+
+## 🚀 Установка
+
+### 1️⃣ Клонировать файл
 ```bash
-chmod +x start.sh
-sudo ./start.sh
+wget https://raw.githubusercontent.com/Fox216540/vless-installer/main/installer.sh -O installer.sh
 ```
 
-После первого запуска получите сообщение `✅ Система готова`.
-
-## Команды
-
+### 2️⃣ Дать права на выполнение
 ```bash
-sudo ./start.sh setname "My VPN"
-sudo ./start.sh addsni example.com
-sudo ./start.sh addsni a.com,b.com
-sudo ./start.sh delsni example.com
-sudo ./start.sh generateclient alice
-sudo ./start.sh delclient alice
-sudo ./start.sh view alice
-sudo ./start.sh view alice example.com
-sudo ./start.sh view alice a.com,b.com
-sudo ./start.sh list
+chmod +x installer.sh
 ```
 
-## Описание команд
-
-- `setname <name>`: задаёт отображаемое имя ссылки (remark). Если не указать имя, сбрасывается.
-- `addsni <domain[,domain2]>`: добавляет один или несколько доменов (SNI).
-- `delsni <domain[,domain2]>`: удаляет домены.
-- `generateclient <name>`: создаёт клиента с UUID.
-- `delclient <name>`: удаляет клиента.
-- `view <name> [domain[,domain2]]`: печатает VLESS-ссылки для клиента.
-- `list`: показывает список доменов и клиентов.
-
-## Примеры сценария
-
+### 3️⃣ Запустить от root
 ```bash
-sudo ./start.sh
-sudo ./start.sh addsni cloudflare.com
-sudo ./start.sh generateclient user1
-sudo ./start.sh setname "Main Profile"
-sudo ./start.sh view user1
+sudo ./installer.sh
 ```
 
-## Где хранятся данные
+После первого запуска скрипт установит всё необходимое и выведет: `✅ Система готова`.
 
-- Домены: `/var/lib/sing-box-manager/snis.conf`
-- Пользователи: `/var/lib/sing-box-manager/users.conf`
-- Ключи/параметры Reality: `/var/lib/sing-box-manager/credentials.conf`
+---
 
-## Примечания
+## 🧩 Команды
 
-- Скрипт должен запускаться от `root`.
-- При отсутствии SNI скрипт формирует безопасный fallback-конфиг.
-- `view` использует внешний IP через `ifconfig.me`; убедитесь, что сервер имеет исходящий доступ в интернет.
-- Для каждого домена создаётся отдельный inbound на локальном порту, начиная с `4431`.
+### 🌐 Управление доменами (SNI)
+
+```bash
+sudo ./installer.sh addsni example.com
+sudo ./installer.sh addsni a.com,b.com
+sudo ./installer.sh delsni example.com
+```
+
+### 👤 Управление клиентами
+
+```bash
+sudo ./installer.sh generateclient alice
+sudo ./installer.sh delclient alice
+```
+
+### 🔗 Просмотр ссылок
+
+```bash
+sudo ./installer.sh view alice
+sudo ./installer.sh view alice example.com
+sudo ./installer.sh view alice a.com,b.com
+```
+
+### 🏷 Имя ссылок (remark)
+
+```bash
+sudo ./installer.sh setname "My VPN"
+```
+
+Если имя не задано, используется имя клиента.
+
+### 📋 Список доменов и клиентов
+
+```bash
+sudo ./installer.sh list
+```
+
+---
+
+## ⚡ Быстрый сценарий
+
+```bash
+sudo ./installer.sh
+sudo ./installer.sh addsni www.cloudflare.com
+sudo ./installer.sh generateclient user1
+sudo ./installer.sh setname "Main Profile"
+sudo ./installer.sh view user1
+```
+
+---
+
+## 📂 Где хранятся данные
+
+- Домены (SNI): `/var/lib/sing-box-manager/snis.conf`
+- Клиенты: `/var/lib/sing-box-manager/users.conf`
+- Ключи Reality и имя ссылок: `/var/lib/sing-box-manager/credentials.conf`
+- Конфиг `sing-box`: `/etc/sing-box/config.json`
+- Конфиг `nginx`: `/etc/nginx/nginx.conf`
+
+---
+
+## 📝 Примечания
+
+- Скрипт всегда нужно запускать от `root`.
+- При пустом списке SNI поднимается fallback-конфиг (без рабочих inbound).
+- Для генерации ссылок используется внешний IP через `ifconfig.me`.
+- Для каждого SNI создаётся отдельный inbound, начиная с локального порта `4431`.
+
