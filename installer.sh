@@ -22,24 +22,24 @@ if [ ! -f /etc/nginx/modules-enabled/50-mod-stream.conf ]; then
 fi
 
 get_credentials() {
+    # Проверка: если sing-box не установлен, ставим его сейчас, иначе не сгенерируем ключи
+    if [ ! -x "$(command -v sing-box)" ]; then
+        echo "📦 Установка sing-box..."
+        bash <(curl -fsSL https://sing-box.app/install.sh)
+    fi
+
     if [ -f "$CRED_FILE" ]; then
         source "$CRED_FILE"
-        if [ -z "$SERVER_IP" ]; then
-            SERVER_IP=$(curl -s ifconfig.me)
-            echo "SERVER_IP=\"$SERVER_IP\"" >> "$CRED_FILE"
-        fi
     else
-        echo "⚙️ Инициализация сервера..."
+        echo "🔑 Генерация постоянных ключей REALITY..."
         KEYS=$(sing-box generate reality-keypair)
         PRIV_KEY=$(echo "$KEYS" | awk '/PrivateKey/ {print $2}')
         PUB_KEY=$(echo "$KEYS" | awk '/PublicKey/ {print $2}')
         SHORT_ID=$(openssl rand -hex 8)
-        SERVER_IP=$(curl -s ifconfig.me)
         cat > "$CRED_FILE" <<EOF
 PRIV_KEY="$PRIV_KEY"
 PUB_KEY="$PUB_KEY"
 SHORT_ID="$SHORT_ID"
-SERVER_IP="$SERVER_IP"
 EOF
         source "$CRED_FILE"
     fi
@@ -122,47 +122,59 @@ $(echo -e "$NGINX_UPSTREAMS")
 }
 EOF
 
-    nginx -t > /dev/null 2>&1 && (systemctl reload nginx || systemctl restart nginx) || systemctl restart nginx
+    if nginx -t > /dev/null 2>&1; then
+        systemctl reload nginx || systemctl restart nginx
+    else
+        systemctl restart nginx
+    fi
+
     echo "{\"log\": {\"level\": \"warn\"}, \"inbounds\": [ $SB_INBOUNDS ], \"outbounds\": [{\"type\": \"direct\"}]}" > "$CONFIG_DIR/config.json"
     systemctl is-active --quiet sing-box && systemctl kill -s SIGHUP sing-box || systemctl restart sing-box
 }
 
 case "$1" in
     setname)
-        # Если $2 пустое — имя сбросится, если нет — запишется с поддержкой Unicode
         get_credentials
         sed -i '/VPN_NAME=/d' "$CRED_FILE"
         if [ -n "$2" ]; then
             echo "VPN_NAME=\"$2\"" >> "$CRED_FILE"
-            echo "✅ Текст ссылки установлен: $2"
+            echo "✅ Имя ссылки установлено: $2"
         else
-            echo "🔄 Имя сброшено к стандартному (VLESS-имя)"
+            echo "🔄 Имя сброшено"
         fi
         ;;
     addsni)
-        if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
+        if [ -z "$2" ]; then echo "❌ Укажите домен(ы)"; exit 1; fi
         INPUT_SNIS=${2//,/ }
         for s in $INPUT_SNIS; do
-            if ! grep -qxF "$s" "$SNI_FILE"; then echo "$s" >> "$SNI_FILE"; echo "SNI ADD"; fi
+            if ! grep -qxF "$s" "$SNI_FILE"; then
+                echo "$s" >> "$SNI_FILE"
+                echo "SNI ADD"
+            fi
         done
         rebuild_configs > /dev/null
         ;;
     delsni)
-        if [ -z "$2" ]; then echo "NO DOMAIN"; exit 1; fi
+        if [ -z "$2" ]; then echo "❌ Укажите домен(ы)"; exit 1; fi
         INPUT_SNIS=${2//,/ }
-        for s in $INPUT_SNIS; do sed -i "\|^$s$|d" "$SNI_FILE"; echo "SNI DELETE"; done
+        for s in $INPUT_SNIS; do
+            sed -i "\|^$s$|d" "$SNI_FILE"
+            echo "SNI DELETE"
+        done
         rebuild_configs > /dev/null
         ;;
     generateclient)
-        if [ -z "$2" ]; then echo "NO NAME"; exit 1; fi
-        if grep -q "^$2:" "$USER_FILE"; then echo "ALREADY EXIST"; else
+        if [ -z "$2" ]; then echo "❌ Укажите имя"; exit 1; fi
+        if grep -q "^$2:" "$USER_FILE"; then
+            echo "ALREADY EXIST"
+        else
             echo "$2:$(cat /proc/sys/kernel/random/uuid)" >> "$USER_FILE"
             rebuild_configs > /dev/null
             echo "CLIENT ADD"
         fi
         ;;
     delclient)
-        if [ -z "$2" ]; then echo "NO NAME"; exit 1; fi
+        if [ -z "$2" ]; then echo "❌ Укажите имя"; exit 1; fi
         sed -i "/^$2:/d" "$USER_FILE"
         rebuild_configs > /dev/null
         echo "CLIENT DELETE"
@@ -170,25 +182,21 @@ case "$1" in
     view)
         CLIENT_NAME="$2"
         SPECIFIC_SNIS="$3"
-        if [ -z "$CLIENT_NAME" ]; then echo "ERROR VIEW"; exit 1; fi
-        USER_DATA=$(grep "^$CLIENT_NAME:" "$USER_FILE") || { echo "NO EXIST"; exit 1; }
+        if [ -z "$CLIENT_NAME" ]; then echo "❌ Кого смотрим?"; exit 1; fi
+        USER_DATA=$(grep "^$CLIENT_NAME:" "$USER_FILE") || { echo "❌ Не найден"; exit 1; }
         UUID=$(echo "$USER_DATA" | cut -d: -f2)
         get_credentials
+        IP=$(curl -s ifconfig.me)
         
-        # Если VPN_NAME задано, используем его. Если нет — стандарт.
-        if [ -n "$VPN_NAME" ]; then
-            REMARK="$VPN_NAME"
-        else
-            REMARK="VLESS-$CLIENT_NAME"
-        fi
-
-        # Заменяем пробелы на %20 для безопасности ссылки
-        REMARK_ENCODED="${REMARK// /%20}"
+        # Используем сохраненное имя, если оно есть
+        REMARK="${VPN_NAME:-$CLIENT_NAME}"
+        # Замена пробелов на %20 для стабильности ссылки
+        REMARK_URL="${REMARK// /%20}"
 
         SELECTED_SNIS=${SPECIFIC_SNIS//,/ }
         [ -z "$SELECTED_SNIS" ] && SELECTED_SNIS=$(cat "$SNI_FILE")
         for s in $SELECTED_SNIS; do
-            echo "vless://$UUID@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$REMARK_ENCODED"
+            echo "vless://$UUID@$IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$s&fp=chrome&pbk=$PUB_KEY&sid=$SHORT_ID&type=tcp#$REMARK_URL"
         done
         ;;
     list)
@@ -199,6 +207,6 @@ case "$1" in
         apt update && apt install -y curl jq openssl nginx libnginx-mod-stream
         [ ! -x "$(command -v sing-box)" ] && bash <(curl -fsSL https://sing-box.app/install.sh)
         rebuild_configs
-        echo "DONE"
+        echo "✅ Система готова"
         ;;
 esac
